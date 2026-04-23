@@ -1,0 +1,81 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(5, 3, 20, 0.78);
+  backdrop-filter: blur(12px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.25s ease;
+}
+
+.box {
+  background: linear-gradient(155deg, #1a1540 0%, #0f0d2e 100%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 28px;
+  padding: 40px;
+  width: min(500px, 92vw);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  animation: slideUp 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.close {
+  position: absolute;
+  top: 18px;
+  right: 20px;
+  background: rgba(255, 255, 255, 0.08);
+  border: none;
+  border-radius: 50%;
+  width: 32px;
+  height: 32px;
+  cursor: pointer;
+  color: rgba(200, 190, 255, 0.65);
+  font-size: 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+}
+.close:hover { background: rgba(255, 255, 255, 0.18); }
+
+.content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.signChar {
+  font-family: 'Sora', sans-serif;
+  font-size: 4rem;
+  font-weight: 800;
+  color: #fff;
+  margin-bottom: 20px;
+}
+
+.signFingers {
+  font-size: 1.1rem;
+  color: rgba(200, 190, 255, 0.9);
+  line-height: 1.5;
+  margin-bottom: 16px;
+}
+
+.signTip {
+  font-size: 1rem;
+  color: rgba(78, 205, 164, 0.9);
+  line-height: 1.5;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}

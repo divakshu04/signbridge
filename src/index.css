@@ -1,0 +1,16 @@
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap');
+
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  width: 100%;
+  min-height: 100%;
+  font-family: 'DM Sans', sans-serif;
+  background: #0a0820;
+  color: #f0eeff;
+  overflow-x: hidden;
+}

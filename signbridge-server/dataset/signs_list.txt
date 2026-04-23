@@ -1,0 +1,12 @@
+hello
+yes
+no
+please
+water
+bad
+where
+why
+fine
+drink
+home
+time

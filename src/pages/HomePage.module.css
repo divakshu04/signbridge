@@ -1,0 +1,254 @@
+/* ── Aurora glows ── */
+.aurora {
+  position: fixed;
+  z-index: 0;
+  pointer-events: none;
+  border-radius: 50%;
+  filter: blur(90px);
+  opacity: 0.45;
+}
+.aurora1 {
+  width: 600px; height: 500px;
+  left: -150px; top: 100px;
+  background: radial-gradient(ellipse, #4c3bbd 0%, transparent 70%);
+  animation: drift1 14s ease-in-out infinite alternate;
+}
+.aurora2 {
+  width: 500px; height: 400px;
+  right: -100px; top: 50px;
+  background: radial-gradient(ellipse, #c9608a 0%, transparent 70%);
+  animation: drift2 18s ease-in-out infinite alternate;
+}
+.aurora3 {
+  width: 700px; height: 350px;
+  left: 50%; transform: translateX(-50%);
+  bottom: 80px;
+  background: radial-gradient(ellipse, #7c5cbf 0%, transparent 70%);
+  animation: drift3 22s ease-in-out infinite alternate;
+  opacity: 0.3;
+}
+
+@keyframes drift1 {
+  from { transform: translate(0,0) scale(1); }
+  to   { transform: translate(60px,-40px) scale(1.1); }
+}
+@keyframes drift2 {
+  from { transform: translate(0,0) scale(1); }
+  to   { transform: translate(-50px,30px) scale(1.08); }
+}
+@keyframes drift3 {
+  from { transform: translateX(-50%) scale(1); }
+  to   { transform: translateX(-45%) scale(1.12); }
+}
+
+/* ── City silhouette ── */
+.city {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  z-index: 1;
+  pointer-events: none;
+  height: 220px;
+}
+
+/* ── Page layout ── */
+.page {
+  position: relative;
+  z-index: 10;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 24px 180px;
+}
+
+/* ── Logo ── */
+.logoWrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  animation: fadeDown 0.9s cubic-bezier(0.16,1,0.3,1) both;
+}
+.logoName {
+  font-family: 'Sora', sans-serif;
+  font-size: clamp(2rem, 5vw, 2.8rem);
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  background: linear-gradient(135deg, #a0c4ff 0%, #ffffff 40%, #d8aaff 80%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.logoTagline {
+  font-size: 0.95rem;
+  font-weight: 300;
+  color: rgba(200,190,255,0.65);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+/* ── Hero text ── */
+.heroText {
+  text-align: center;
+  margin-top: 48px;
+  animation: fadeDown 0.9s 0.15s cubic-bezier(0.16,1,0.3,1) both;
+}
+.heroTitle {
+  font-family: 'Sora', sans-serif;
+  font-size: clamp(1.8rem, 5.5vw, 3.2rem);
+  font-weight: 700;
+  line-height: 1.15;
+  background: linear-gradient(160deg, #ffffff 0%, #c8b8ff 60%, #e8a0c0 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 12px;
+}
+.heroSub {
+  font-size: 1.05rem;
+  color: rgba(200,190,255,0.65);
+  font-weight: 300;
+  letter-spacing: 0.5px;
+}
+
+/* ── Cards ── */
+.cards {
+  display: flex;
+  gap: 20px;
+  margin-top: 52px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.card {
+  width: 220px;
+  padding: 36px 24px 32px;
+  border-radius: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.35s cubic-bezier(0.16,1,0.3,1), box-shadow 0.35s ease;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: none;
+  animation: fadeUp 0.8s cubic-bezier(0.16,1,0.3,1) both;
+}
+
+/* shimmer sweep */
+.card::after {
+  content: '';
+  position: absolute;
+  top: -60%; left: -60%;
+  width: 50%; height: 180%;
+  background: linear-gradient(120deg, transparent 30%, rgba(255,255,255,0.12) 50%, transparent 70%);
+  transform: rotate(25deg);
+  transition: left 0.6s ease;
+}
+.card:hover::after { left: 140%; }
+.card:hover { transform: translateY(-8px) scale(1.03); }
+.card:active { transform: translateY(-4px) scale(1.01); }
+
+.cardMeet {
+  background: linear-gradient(145deg, #1a3490 0%, #2663d9 60%, #3a7af0 100%);
+  box-shadow: 0 8px 40px rgba(38,99,217,0.4);
+  animation-delay: 0.25s;
+}
+.cardMeet:hover { box-shadow: 0 20px 60px rgba(38,99,217,0.65); }
+
+.cardJoin {
+  background: linear-gradient(145deg, #3d1f9e 0%, #6b3fc7 60%, #8a5ce0 100%);
+  box-shadow: 0 8px 40px rgba(107,63,199,0.45);
+  animation-delay: 0.38s;
+}
+.cardJoin:hover { box-shadow: 0 20px 60px rgba(107,63,199,0.7); }
+
+.cardLearn {
+  background: linear-gradient(145deg, #0d7a60 0%, #1dab8a 60%, #3cc9a8 100%);
+  box-shadow: 0 8px 40px rgba(29,171,138,0.4);
+  animation-delay: 0.51s;
+}
+.cardLearn:hover { box-shadow: 0 20px 60px rgba(29,171,138,0.65); }
+
+.cardIcon {
+  width: 64px; height: 64px;
+  background: rgba(255,255,255,0.18);
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.3s, transform 0.3s;
+  backdrop-filter: blur(4px);
+}
+.card:hover .cardIcon {
+  background: rgba(255,255,255,0.28);
+  transform: scale(1.1) rotate(-4deg);
+}
+
+.cardLabel {
+  font-family: 'Sora', sans-serif;
+  font-size: 1rem;
+  font-weight: 600;
+  text-align: center;
+  color: white;
+  line-height: 1.3;
+}
+
+/* ── Feature bar ── */
+.featureBar {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  z-index: 20;
+  background: rgba(10, 8, 32, 0.82);
+  backdrop-filter: blur(20px);
+  border-top: 1px solid rgba(255,255,255,0.08);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: clamp(24px, 6vw, 80px);
+  padding: 18px 40px;
+  animation: fadeUp 0.9s 0.6s cubic-bezier(0.16,1,0.3,1) both;
+}
+
+.feat {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  opacity: 0.75;
+  transition: opacity 0.25s, transform 0.25s;
+  background: none;
+  border: none;
+  color: #f0eeff;
+  font-family: 'DM Sans', sans-serif;
+  padding: 0;
+}
+.feat:hover { opacity: 1; transform: translateY(-2px); }
+
+.featIcon { font-size: 1.4rem; line-height: 1; }
+.featLabel { font-size: 0.9rem; font-weight: 400; white-space: nowrap; }
+
+.featSep {
+  width: 1px; height: 28px;
+  background: rgba(255,255,255,0.12);
+}
+
+/* ── Animations ── */
+@keyframes fadeDown {
+  from { opacity: 0; transform: translateY(-24px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(30px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Responsive ── */
+@media (max-width: 560px) {
+  .cards { flex-direction: column; align-items: center; }
+  .card  { width: min(280px, 90vw); }
+  .featLabel { font-size: 0.78rem; }
+}
