@@ -5,10 +5,12 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 # ── Load model ────────────────────────────────────────────────────────
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 print("Loading model...")
 try:
     import tensorflow as tf
-    model = tf.keras.models.load_model("signbridge_model.keras")
+    model_path = os.path.join(BASE_DIR, "signbridge_model.keras")
+    model = tf.keras.models.load_model(model_path)
     print("✓ Model loaded")
 except Exception as e:
     print(f"✗ Model load failed: {e}")
