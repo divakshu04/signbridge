@@ -5,6 +5,7 @@ os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 import json
 import numpy as np
 from collections import deque, Counter
+import traceback
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
