@@ -372,7 +372,7 @@ load_dotenv()
 
 try:
     from groq import Groq
-    groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+    groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
     print("✓ Groq client ready")
 except Exception as e:
     groq_client = None
