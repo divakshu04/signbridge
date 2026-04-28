@@ -25,12 +25,17 @@ FEATURES     = config["features"]           # 258
 print(f"✓ {len(SIGNS)} signs ready")
 
 app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"],
-                   allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], 
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/")
 def root():
-    return {"status": "SignBridge running", "signs": len(SIGNS)}
+    return {"status": "SignBridge Online", "model_loaded": model is not None}
 
 # ── Raw frame extraction ─────────────────────────────────────────────
 def extract_frame_raw(pose, left_hand, right_hand):
