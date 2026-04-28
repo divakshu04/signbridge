@@ -1,7 +1,7 @@
+import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
-import os
 import json
 import numpy as np
 from collections import deque, Counter
