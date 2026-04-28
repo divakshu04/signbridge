@@ -17,7 +17,8 @@ try:
     model = tf.keras.models.load_model(model_path)
     print("✓ Model loaded")
 except Exception as e:
-    print(f"✗ Model load failed: {e}")
+    print("✗ Model load failed:")
+    traceback.print_exc()
     model = None
 
 with open(os.path.join(BASE_DIR, "model_config.json")) as f:
