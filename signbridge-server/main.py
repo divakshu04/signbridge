@@ -1,13 +1,3 @@
-"""
-SignBridge Server — Clean rewrite
-==================================
-Key behaviours:
-  - Instant reset when hand removed
-  - Single candidate in filter → accept after short hold (ignores model %)
-  - Multiple candidates → model picks with confidence vote
-  - ~2-3 second window
-"""
-
 import json
 import numpy as np
 from collections import deque, Counter
@@ -67,15 +57,6 @@ def extract_frame_raw(pose, left_hand, right_hand):
 
 # ── Wrist position from pose ──────────────────────────────────────────
 def get_wrist_info(pose):
-    """
-    Returns normalized wrist Y relative to shoulders.
-    Used only for lightweight post-model correction.
-
-    Returns dict with:
-      wrist_y       : normalized Y (negative = above shoulders)
-      shoulder_y    : raw shoulder Y midpoint
-      shoulder_width: raw shoulder width (scale reference)
-    """
     if not pose or len(pose) < 17:
         return None
 
@@ -108,37 +89,6 @@ def get_wrist_info(pose):
 
 # ── Post-model confusion correction ──────────────────────────────────
 def correct_probs(probs, sign_to_idx, wrist_info):
-    """
-    Lightweight targeted correction for known confused pairs.
-    Only nudges probabilities for specific signs based on wrist height.
-    Does NOT affect signs that are already working well.
-
-    Corrections applied:
-      home vs drink:
-        - home: cheek/chin level (wrist_y between -0.8 and -0.3)
-        - drink: mouth level, slightly higher (wrist_y < -0.5)
-
-      finish vs please:
-        - finish: has outward movement (harder to detect here, boost if
-          please is winning but finish is close)
-        - please: circular at chest
-
-      sad vs sleepy vs sleep:
-        - sad: face level, both hands (wrist_y < -0.6)
-        - sleepy/sleep: face level dropping
-
-      go vs look:
-        - look: closer to face (wrist_y < -0.5)
-        - go: neutral space (wrist_y > -0.4)
-
-      man vs dad:
-        - dad: forehead (wrist_y < -0.9)
-        - man: forehead then chest movement
-
-      mom vs food vs taste vs bird:
-        - food/taste/bird: at mouth (wrist_y between -0.7 and -0.4)
-        - mom: slightly lower at chin
-    """
     if wrist_info is None:
         return probs
 
@@ -159,7 +109,6 @@ def correct_probs(probs, sign_to_idx, wrist_info):
             corrected[i] = corrected[i] * factor
 
     # ── home vs drink ─────────────────────────────────────────────
-    # home is at cheek (lower), drink is at mouth (higher/closer to face)
     if wy < -0.55:
         # Hand is near face/mouth — drink more likely than home
         boost("drink", 1.4)
@@ -170,9 +119,6 @@ def correct_probs(probs, sign_to_idx, wrist_info):
         reduce("drink", 0.6)
 
     # ── finish vs please ──────────────────────────────────────────
-    # Both at chest level — hard to separate without movement
-    # please is circular, finish is flip outward
-    # Slight boost to finish when at neutral/chest (it's often too low score)
     if -0.35 <= wy < 0.2:
         i_finish = idx("finish")
         i_please = idx("please")
@@ -185,7 +131,6 @@ def correct_probs(probs, sign_to_idx, wrist_info):
                     boost("finish", 1.2)
 
     # ── go vs look ────────────────────────────────────────────────
-    # look is near face, go is in neutral space in front
     if wy < -0.50:
         boost("look", 1.3)
         reduce("go", 0.7)
@@ -194,52 +139,38 @@ def correct_probs(probs, sign_to_idx, wrist_info):
         reduce("look", 0.7)
 
     # ── mom vs food vs taste vs bird ─────────────────────────────
-    # All near mouth — mom is specifically at chin (slightly lower)
     if -0.55 < wy < -0.35:
-        # Chin level — mom territory
         boost("mom", 1.3)
     elif -0.70 < wy <= -0.55:
-        # Mouth level — food/taste/bird territory
         boost("food",  1.2)
         boost("taste", 1.2)
         boost("bird",  1.1)
         reduce("mom",  0.8)
 
     # ── dad vs man vs boy vs hello ────────────────────────────────
-    # dad and hello are at forehead, man transitions forehead→chest
     if wy < -0.85:
-        # Very high — forehead level
         boost("dad",   1.3)
-        boost("hello", 1.2)
+        boost("hello", 1.1)
         reduce("man",  0.8)
-
-    # ── sad vs sleepy vs sleep ────────────────────────────────────
-    # All face level downward — hard to separate
-    # No strong position signal here — leave to model
-
     # ── cat vs home ───────────────────────────────────────────────
-    # cat is at cheek pulling outward, home is chin tapping
     if -0.60 < wy < -0.30:
         i_cat  = idx("cat")
         i_home = idx("home")
         if i_cat >= 0 and i_home >= 0:
             if abs(corrected[i_cat] - corrected[i_home]) < 0.12:
-                # Very close — no strong correction, trust model
                 pass
 
     # ── time ─────────────────────────────────────────────────────
-    # time requires tapping wrist — usually at neutral/low level
     if -0.20 < wy < 0.30:
         boost("time", 1.2)
 
     # ── dog ──────────────────────────────────────────────────────
-    # dog is at side/thigh level — very low position
     if wy > 0.10:
         boost("dog", 1.5)
     else:
         reduce("dog", 0.7)
 
-    # Renormalize so probabilities sum to 1
+    # Renormalize 
     total = corrected.sum()
     if total > 0:
         corrected = corrected / total
@@ -255,27 +186,9 @@ VOTE_RATIO          = 0.55
 COOLDOWN            = 40
 HAND_LOSS_TOLERANCE = 3
 
-# Build sign→idx map for correction function
 SIGN_TO_IDX = {v: k for k, v in IDX_TO_SIGN.items()}
 
-
-# ── Context-aware sign filtering ─────────────────────────────────────
-def get_contextual_signs(conversation_context):
-    """
-    NOTE: This function no longer modifies sign detection.
-    Context filtering was causing false positives.
-    
-    Now we use RAW model predictions for all signs equally.
-    Context is ONLY used by Groq for sentence generation.
-    """
-    return {}  # Return empty - no filtering, raw model only
-
-
 def apply_context_filter(probs, sign_to_idx, contextual_boosts):
-    """
-    Applies soft context-based filtering to prediction probabilities.
-    Uses contextual boosts to guide predictions without suppressing model accuracy.
-    """
     filtered = probs.copy()
     
     for sign, boost_factor in contextual_boosts.items():
@@ -298,7 +211,7 @@ def make_predictor():
     last_word       = None
     cooldown        = 0
     hand_loss_count = 0
-    context_history = deque(maxlen=5)  # Track recent context
+    context_history = deque(maxlen=5)  
 
     def reset():
         nonlocal last_word, cooldown, hand_loss_count
@@ -322,7 +235,6 @@ def make_predictor():
     def predict(pose, left_hand, right_hand, conversation_context=""):
         nonlocal last_word, cooldown, hand_loss_count
 
-        # Track conversation context for filtering
         if conversation_context.strip():
             context_history.append(conversation_context)
 
@@ -366,12 +278,8 @@ def make_predictor():
         probs = model.predict(seq, verbose=0)[0]
 
         # ── Apply lightweight confusion correction ────────────────────
-        # Re-enabled: This helps distinguish similar signs like dad/man
         wrist_info = get_wrist_info(pose)
         probs      = correct_probs(probs, SIGN_TO_IDX, wrist_info)
-
-        # NOTE: Context filtering disabled - using raw model predictions only
-        # Groq handles context for sentence generation, not sign detection
 
         top5_idx   = np.argsort(probs)[-5:][::-1]
         top5_signs = [IDX_TO_SIGN.get(int(i), "?") for i in top5_idx]
@@ -435,7 +343,6 @@ async def websocket_signs(ws: WebSocket):
     try:
         while True:
             data   = json.loads(await ws.receive_text())
-            # Extract context from client if provided
             conversation_context = data.get("context", "")
             result = predict(data.get("pose", []),
                              data.get("left_hand", []),
@@ -467,11 +374,6 @@ from fastapi import Request
 
 @app.post("/suggest")
 async def suggest_sentence(request: Request):
-    """
-    For every sign:
-    - If other person sent a message recently → Groq replies to it using the sign
-    - If no recent context → returns a general fallback sentence for that sign
-    """
     if not groq_client:
         return {"sentence": "", "error": "Groq not configured"}
 
@@ -484,7 +386,6 @@ async def suggest_sentence(request: Request):
             return {"sentence": "", "error": "No sign word"}
 
         # ── General fallback sentences for all 30 signs ───────────────
-        # These work in any context when there is nothing to reply to
         GENERAL = {
             "hello":    "Hello there",
             "bye":      "Goodbye, see you",
@@ -518,46 +419,56 @@ async def suggest_sentence(request: Request):
             "bird":     "Look at that bird",
         }
 
-        # ── Check if there is a SINGLE recent message to reply to ────────────
-        # Only consider the LAST message (most recent), only from the other person
         recent_them = None
         if history:
-            # Check ONLY the last message in history
             last_msg = history[-1]
             if last_msg.get("sender") == "them":
                 recent_them = last_msg.get("text", "").strip()
 
-        # If no recent message from other person, return general fallback
         if not recent_them:
             fallback = GENERAL.get(sign_word, sign_word.capitalize())
             return {"sentence": fallback}
 
-        # ── There is a recent message — use Groq to reply ─────────────
         general_fallback = GENERAL.get(sign_word, sign_word.capitalize())
 
-        prompt = f"""Other person said: "{recent_them}"
-I signed the word: "{sign_word}"
-My general meaning for this sign: "{general_fallback}"
+        prompt = f"""Other person said: \"{recent_them}\"
+My sign meaning: \"{general_fallback}\"
 
 Write ONE short natural reply (3-8 words) that:
-- Directly answers what they said
-- Uses the meaning of my sign word
-- Sounds like normal conversation
+- directly answers what they said
+- matches the intent of the sign meaning
+- does not mention the sign word itself
+- does not repeat the exact sign phrase as a label
+- sounds like normal conversation
+
+Examples:
+Other person said: "Hello, how are you?"
+My sign meaning: "Hello there"
+Reply: "I'm good, thanks."
+
+Other person said: "Where are you going?"
+My sign meaning: "I want my dad"
+Reply: "I'm going to see my dad."
 
 Only output the reply sentence, nothing else."""
 
         response = groq_client.chat.completions.create(
             model="llama-3.1-8b-instant",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=25,
-            temperature=0.2,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a reply assistant that writes short conversational answers for a sign language user.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=30,
+            temperature=0.15,
         )
 
         sentence = response.choices[0].message.content.strip()
         sentence = sentence.strip('"\'`').split("\n")[0].strip()
         sentence = " ".join(sentence.split())
 
-        # Fallback if Groq returns empty or just the sign word
         if not sentence or sentence.lower() == sign_word:
             sentence = general_fallback
 

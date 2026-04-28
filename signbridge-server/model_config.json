@@ -33,6 +33,6 @@
   ],
   "sequence_length": 30,
   "features": 258,
-  "val_accuracy": 0.7959885597229004,
+  "val_accuracy": 0.8120343685150146,
   "num_classes": 30
 }

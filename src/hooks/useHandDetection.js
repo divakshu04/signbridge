@@ -24,10 +24,8 @@ export function useHandDetection(videoRef, isActive, onWordDetected, getContextF
         try {
           const result = JSON.parse(event.data);
 
-          // Update debug info for overlay
           setDebugInfo(result);
 
-          // Only fire callback when a word is fully accepted
           if (result.status === "accepted" && result.word) {
             onWordDetected(result.word, result.confidence);
           }
@@ -124,7 +122,7 @@ export function useHandDetection(videoRef, isActive, onWordDetected, getContextF
           });
         }
 
-        // Draw left hand (teal)
+        // Draw left hand (green)
         if (hasLeft) {
           drawConnectors(ctx, results.leftHandLandmarks, HAND_CONNECTIONS, {
             color: "#4ecda4", lineWidth: 2,
@@ -144,10 +142,9 @@ export function useHandDetection(videoRef, isActive, onWordDetected, getContextF
           });
         }
 
-        // Send to server every frame, including empty payloads when no hand is visible
+        // Send to server 
         const ws = wsRef.current;
         if (ws?.readyState === WebSocket.OPEN) {
-          // Get conversation context from parent if available
           let context = "";
           if (getContextFunc && typeof getContextFunc === "function") {
             context = getContextFunc();
@@ -157,7 +154,7 @@ export function useHandDetection(videoRef, isActive, onWordDetected, getContextF
             pose:       results.poseLandmarks      || [],
             left_hand:  results.leftHandLandmarks  || [],
             right_hand: results.rightHandLandmarks || [],
-            context:    context, // Send conversation context for filtering
+            context:    context, 
           }));
         }
       });
