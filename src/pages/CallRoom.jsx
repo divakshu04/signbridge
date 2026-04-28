@@ -97,7 +97,7 @@ export default function CallRoom({ roomCode, isHost, onLeave }) {
         console.log(`📋 Mode: Contextual (sign + recent message)`);
       }
 
-      const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/suggest`, {
+      const res = await fetch(`${import.meta.env.VITE_API_URL || 'https://signbridge-backend-1a9h.onrender.com'}/suggest`, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({ 
