@@ -16,9 +16,9 @@ except Exception as e:
     print(f"✗ Model load failed: {e}")
     model = None
 
-with open("model_config.json") as f:
+with open(os.path.join(BASE_DIR, "model_config.json")) as f:
     config = json.load(f)
-with open("label_map.json") as f:
+with open(os.path.join(BASE_DIR, "label_map.json")) as f:
     IDX_TO_SIGN = {int(k): v for k, v in json.load(f).items()}
 
 SIGNS        = config["signs"]
