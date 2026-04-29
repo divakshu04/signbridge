@@ -152,6 +152,9 @@ export default function CallRoom({ roomCode, isHost, onLeave }) {
           case "ice":
             if (pc.current?.remoteDescription) try { await pc.current.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch {}
             break;
+          case "chat":
+            addMsg(msg.text, "remote", msg.msgType);
+            break;
           case "peer_left":
             setPeerStatus("waiting"); setStatusMsg(isHost ? "Guest left." : "Host left.");
             if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
@@ -214,6 +217,7 @@ export default function CallRoom({ roomCode, isHost, onLeave }) {
     const msgType = inputSourceRef.current === "sign" ? "sign" : "text";
     addMsg(text, "local", msgType);
     if (msgType === "sign") { const all = messagesRef.current.filter(m => m.sender !== "system" && m.type !== "sign"); if (all.length > 0 && all[all.length-1].sender === "remote") lastRepliedRef.current = all[all.length-1].id; }
+    sendSig({ type: "chat", text, msgType });
     setInputText(""); inputSourceRef.current = "manual";
   }
   function handleLeave() {
