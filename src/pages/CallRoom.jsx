@@ -168,7 +168,7 @@ export default function CallRoom({ roomCode, isHost, onLeave }) {
     }
     init();
     return () => { dead.current = true; sig.current?.close(); pc.current?.close(); localStream.current?.getTracks().forEach(t => t.stop()); recognitionRef.current?.stop(); };
-  }, []); // eslint-disable-line
+  }, [roomCode, isHost, createPC, startOffer, addMsg]); // eslint-disable-line
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 

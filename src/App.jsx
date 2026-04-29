@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { BrowserRouter as Router, Routes, Route, useNavigate, useParams } from "react-router-dom";
+import { BrowserRouter as Router, Routes, Route, useNavigate, useParams, useLocation } from "react-router-dom";
 import HomePage from "./pages/HomePage";
 import CallRoom from "./pages/CallRoom";
 import LearnASL from "./pages/LearnASL";
@@ -8,6 +8,7 @@ import LearnNumbersAlpha from "./pages/LearnNumbersAlpha";
 function AppContent() {
   const [page, setPage] = useState("home");
   const navigate = useNavigate();
+  const location = useLocation();
   const { roomCode } = useParams();
 
   useEffect(() => {
@@ -17,13 +18,15 @@ function AppContent() {
   }, [roomCode]);
 
   function enterRoom(code, host) {
-    navigate(`/call/${code}`);
+    navigate(`/call/${code}`, { state: { isHost: host } });
   }
 
   function leaveRoom() {
     navigate("/");
     setPage("home");
   }
+
+  const isHost = location.state?.isHost || false;
 
   return (
     <>
@@ -35,7 +38,7 @@ function AppContent() {
         />
       )}
       {(page === "call" || roomCode) && (
-        <CallRoom roomCode={roomCode} isHost={false} onLeave={leaveRoom} />
+        <CallRoom roomCode={roomCode} isHost={isHost} onLeave={leaveRoom} />
       )}
       {page === "learn-asl" && (
         <LearnASL onBack={() => setPage("home")} />
