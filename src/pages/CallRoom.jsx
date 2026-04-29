@@ -20,20 +20,46 @@ const IconMicSm  = () => <svg viewBox="0 0 24 24" fill="none" width="13" height=
 const IconPlus   = () => <svg viewBox="0 0 24 24" fill="none" width="18" height="18"><path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>;
 const IconUser   = () => <svg viewBox="0 0 24 24" fill="none" width="48" height="48"><circle cx="12" cy="8" r="5" stroke="rgba(255,255,255,0.25)" strokeWidth="1.5"/><path d="M3 21c0-5 4-9 9-9s9 4 9 9" stroke="rgba(255,255,255,0.25)" strokeWidth="1.5" strokeLinecap="round"/></svg>;
 
-/* ── Sanitize room code → valid PeerJS ID (no special chars) ── */
+/* ── Sanitize room code → valid PeerJS ID ── */
 function toPeerId(code) {
-  return "sb" + code.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+  return "signbridge-" + code.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
 }
 
+/*
+ * ICE server config with STUN + free TURN from Open Relay Project.
+ * STUN alone fails when both peers are behind different NATs (most real networks).
+ * TURN relays traffic through a server when direct P2P is blocked.
+ */
+const ICE_SERVERS = [
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun1.l.google.com:19302" },
+  // Open Relay Project — free TURN, no sign-up needed
+  {
+    urls:       "turn:openrelay.metered.ca:80",
+    username:   "openrelayproject",
+    credential: "openrelayproject",
+  },
+  {
+    urls:       "turn:openrelay.metered.ca:443",
+    username:   "openrelayproject",
+    credential: "openrelayproject",
+  },
+  {
+    urls:       "turn:openrelay.metered.ca:443?transport=tcp",
+    username:   "openrelayproject",
+    credential: "openrelayproject",
+  },
+];
+
 export default function CallRoom({ roomCode, isHost, onLeave }) {
-  const [micOn,        setMicOn]        = useState(false);
-  const [camOn,        setCamOn]        = useState(false);
-  const [sttOn,        setSttOn]        = useState(false);
-  const [peerStatus,   setPeerStatus]   = useState("connecting");
-  const [messages,     setMessages]     = useState([]);
-  const [inputText,    setInputText]    = useState("");
-  const [remoteUser,   setRemoteUser]   = useState(null);
-  const [isThinking,   setIsThinking]   = useState(false); // AI loading
+  const [micOn,      setMicOn]      = useState(false);
+  const [camOn,      setCamOn]      = useState(false);
+  const [sttOn,      setSttOn]      = useState(false);
+  const [peerStatus, setPeerStatus] = useState("connecting");
+  const [messages,   setMessages]   = useState([]);
+  const [inputText,  setInputText]  = useState("");
+  const [remoteUser, setRemoteUser] = useState(null);
+  const [isThinking, setIsThinking] = useState(false);
 
   const localVideoRef  = useRef(null);
   const remoteVideoRef = useRef(null);
@@ -41,14 +67,16 @@ export default function CallRoom({ roomCode, isHost, onLeave }) {
   const peerRef        = useRef(null);
   const activeCall     = useRef(null);
   const chatEndRef     = useRef(null);
-  const messagesRef    = useRef([]);    // keep latest messages for Groq call
-  const inputSourceRef = useRef("manual");  // Track if input came from "sign" or "manual" typing
-  const lastRepliedToMessageIdRef = useRef(null);  // Track ID of last message we replied to
-  const recognitionRef = useRef(null);    // Speech recognition instance
+  const messagesRef    = useRef([]);
+  const inputSourceRef = useRef("manual");
+  const lastRepliedToMessageIdRef = useRef(null);
+  const recognitionRef = useRef(null);
+  const retryTimerRef  = useRef(null);   // for guest call retry
+  const destroyedRef   = useRef(false);  // track if component unmounted
 
   const peerId = toPeerId(roomCode);
 
-  /* ── Helper: add a message to chat ── */
+  /* ── Helper: add a message ── */
   const addMsg = useCallback((text, sender, type = "text") => {
     const msg = {
       id:     Date.now() + Math.random(),
@@ -64,244 +92,246 @@ export default function CallRoom({ roomCode, isHost, onLeave }) {
     });
   }, []);
 
-  /* ── Call Groq to get sentence suggestion ── */
-  const getSuggestion = useCallback(async (signWord) => {
-    setIsThinking(true);
-    try {
-      // Build history for Groq — ONLY consider the LAST (most recent) message
-      const allMessages = messagesRef.current
-        .filter(m => m.sender !== "system" && m.type !== "sign");
-      
-      // Only use the last message in history (if it exists)
-      const history = allMessages.length > 0 ? [allMessages[allMessages.length - 1]] : [];
-
-      let historyForGroq = history;
-      let isAlreadyReplied = false;
-
-      // ── Check if we've already replied to this message ──
-      if (history.length > 0 && history[0].sender === "remote") {
-        const currentMessageId = history[0].id;
-        
-        // If already replied to this message, generate general sentence from sign only
-        if (lastRepliedToMessageIdRef.current === currentMessageId) {
-          console.log(`🔄 Already replied to this message. Generating general sentence for "${signWord}"`);
-          isAlreadyReplied = true;
-          historyForGroq = [];  // Empty history = general sentence from sign only
-        }
-      }
-
-      console.log(`🤚 Sign detected: "${signWord}"`);
-      if (isAlreadyReplied) {
-        console.log(`📋 Mode: General sentence (no context)`);
-      } else {
-        console.log(`📋 Mode: Contextual (sign + recent message)`);
-      }
-
-      const res = await fetch(`${import.meta.env.VITE_API_URL || 'https://signbridge-backend-1a9h.onrender.com'}/suggest`, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ 
-          sign_word: signWord, 
-          history: historyForGroq.map(m => ({
-            sender: m.sender === "local" ? "me" : "them",
-            text:   m.text,
-          }))
-        }),
-      });
-
-      if (!res.ok) {
-        throw new Error(`Server error: ${res.status}`);
-      }
-
-      const data = await res.json();
-      
-      // Check if we got a valid sentence
-      if (data.sentence && data.sentence.trim()) {
-        console.log(`✓ Response: "${data.sentence}"`);
-        setInputText(data.sentence);
-        inputSourceRef.current = "sign";
-      } else if (data.error) {
-        console.warn(`⚠ Error: ${data.error}`);
-        const fallback = signWord.charAt(0).toUpperCase() + signWord.slice(1);
-        console.log(`Falling back to: "${fallback}"`);
-        setInputText(fallback);
-        inputSourceRef.current = "sign";
-      }
-    } catch (e) {
-      console.error("❌ Suggestion failed:", e);
-      const fallback = signWord.charAt(0).toUpperCase() + signWord.slice(1);
-      setInputText(fallback);
-      inputSourceRef.current = "sign";
-    } finally {
-      setIsThinking(false);
+  /* ── Attach remote stream to video element ── */
+  function attachRemoteStream(stream) {
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = stream;
+      // Some browsers need a play() call after srcObject is set
+      remoteVideoRef.current.play().catch(() => {});
     }
-  }, []);
+    setPeerStatus("connected");
+  }
 
-  /* ── Sign word detected → call Groq → fill input ── */
-  const onWordDetected = useCallback((word, confidence) => {
-    getSuggestion(word);
-  }, [getSuggestion]);
+  /* ── Handle an established call (shared by host and guest) ── */
+  function handleCall(call, label) {
+    activeCall.current = call;
 
-  /* ── Get conversation context for sign filtering ── */
-  const getConversationContext = useCallback(() => {
-    // Return last 3 messages as context string
-    // IMPORTANT: Exclude auto-generated sign messages to avoid biasing next sign prediction
-    // Only use: remote messages + manually typed local messages
-    return messagesRef.current
-      .filter(m => m.sender !== "system" && m.type !== "sign")  // Exclude auto-generated signs
-      .slice(-3)
-      .map(m => m.text)
-      .join(" ");
-  }, []);
+    call.on("stream", (remoteStream) => {
+      console.log(`✓ Got remote stream from ${label}`);
+      attachRemoteStream(remoteStream);
+      setRemoteUser(label);
+      addMsg(isHost ? "Someone joined the room!" : "Connected! You can now communicate.", "system");
+    });
 
-  /* ── Hand detection hook ── */
-  const { canvasRef: handCanvasRef, handsDetected, wsConnected, debugInfo } = useHandDetection(localVideoRef, camOn, onWordDetected, getConversationContext);
+    call.on("close", () => {
+      setPeerStatus("waiting");
+      setRemoteUser(null);
+      if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+      addMsg("The other person left the call.", "system");
+    });
+
+    call.on("error", (err) => {
+      console.error("Call error:", err);
+      setPeerStatus("error");
+      addMsg("Call error: " + (err.message || err), "system");
+    });
+  }
+
+  /* ── Guest: attempt to call host, retry up to 5 times ── */
+  function guestCallHost(peer, attempt = 1) {
+    if (destroyedRef.current) return;
+    if (attempt > 5) {
+      setPeerStatus("error");
+      addMsg(`Room "${roomCode}" not found. Make sure the host has the room open and try again.`, "system");
+      return;
+    }
+
+    console.log(`Guest: calling host ${peerId} (attempt ${attempt})…`);
+    if (attempt === 1) addMsg("Connecting to room…", "system");
+    else               addMsg(`Retrying… (attempt ${attempt}/5)`, "system");
+
+    const call = peer.call(peerId, localStream.current);
+
+    // If no stream within 6s, retry
+    let gotStream = false;
+    retryTimerRef.current = setTimeout(() => {
+      if (!gotStream && !destroyedRef.current) {
+        call.close();
+        guestCallHost(peer, attempt + 1);
+      }
+    }, 6000);
+
+    call.on("stream", (remoteStream) => {
+      gotStream = true;
+      clearTimeout(retryTimerRef.current);
+      handleCall(call, "Host");
+      attachRemoteStream(remoteStream);
+      setRemoteUser("Host");
+      addMsg("Connected! You can now communicate.", "system");
+    });
+
+    call.on("error", (err) => {
+      clearTimeout(retryTimerRef.current);
+      console.warn("Call attempt error:", err);
+      setTimeout(() => guestCallHost(peer, attempt + 1), 2000);
+    });
+  }
 
   /* ── Set up local media + PeerJS ── */
   useEffect(() => {
-    let peer;
+    destroyedRef.current = false;
 
     async function init() {
-      /* 1. Get camera + mic (both disabled by default) */
+      /* 1. Camera + mic — both off by default */
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         stream.getVideoTracks().forEach((t) => (t.enabled = false));
         stream.getAudioTracks().forEach((t)  => (t.enabled = false));
         localStream.current = stream;
         if (localVideoRef.current) localVideoRef.current.srcObject = stream;
-      } catch (err) {
+      } catch {
         setPeerStatus("error");
-        addMsg("Camera/mic access denied. Please allow permissions and refresh.", "system");
+        addMsg("Camera/mic access denied — please allow permissions and refresh.", "system");
         return;
       }
 
-      /* 2. Create PeerJS instance */
-      // Host uses the room code as their fixed peer ID
-      // Guest gets a random ID assigned by PeerJS
-      peer = new Peer(isHost ? peerId : undefined, {
-        // Uses PeerJS free cloud signaling server — no backend needed
-        host:   "0.peerjs.com",
-        port:   443,
-        secure: true,
-        path:   "/",
-        config: {
-          iceServers: [
-            { urls: "stun:stun.l.google.com:19302" },
-            { urls: "stun:stun1.l.google.com:19302" },
-          ],
-        },
+      /* 2. PeerJS instance
+       *    - Host claims the room-derived ID so the guest knows what to call
+       *    - Guest gets a random ID (it just needs to call the host)
+       *    - Use default PeerJS cloud (more reliable than 0.peerjs.com)
+       */
+      const peer = new Peer(isHost ? peerId : undefined, {
+        config: { iceServers: ICE_SERVERS },
+        // Default PeerJS cloud — omitting host/port/path uses their reliable default
       });
       peerRef.current = peer;
 
-      /* 3. On PeerJS ready */
-      peer.on("open", (id) => {
-        console.log("PeerJS connected, my ID:", id);
+      peer.on("open", (myId) => {
+        console.log("PeerJS open, my ID:", myId);
 
         if (isHost) {
-          // Host waits for guest to call them
           setPeerStatus("waiting");
-          addMsg(`Room ready. Share code "${roomCode}" with the other person.`, "system");
+          addMsg(`Room ready — share code "${roomCode}" with the other person.`, "system");
         } else {
-          // Guest calls the host immediately
-          setPeerStatus("connecting");
-          addMsg("Connecting to room…", "system");
-
-          if (!localStream.current) return;
-          const call = peer.call(peerId, localStream.current);
-          activeCall.current = call;
-
-          call.on("stream", (remoteStream) => {
-            if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStream;
-            setPeerStatus("connected");
-            setRemoteUser("Unknown1");
-            addMsg("Connected! You can now see and hear each other.", "system");
-          });
-
-          call.on("close", () => {
-            setPeerStatus("waiting");
-            setRemoteUser(null);
-            if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
-            addMsg("The other person left the call.", "system");
-          });
-
-          call.on("error", (err) => {
-            setPeerStatus("error");
-            addMsg("Connection error: " + err.message, "system");
-          });
+          // Small delay so the signaling server has time to register the host's ID
+          setTimeout(() => guestCallHost(peer), 500);
         }
       });
 
-      /* 4. Host: answer incoming calls */
+      /* 3. Host answers incoming calls */
       peer.on("call", (call) => {
+        console.log("Host: incoming call from", call.peer);
         call.answer(localStream.current);
-        activeCall.current = call;
-
-        call.on("stream", (remoteStream) => {
-          if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStream;
-          setPeerStatus("connected");
-          setRemoteUser("Unknown2");
-          addMsg("Someone joined the room!", "system");
-        });
-
-        call.on("close", () => {
-          setPeerStatus("waiting");
-          setRemoteUser(null);
-          if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
-          addMsg("The other person left the call.", "system");
-        });
+        handleCall(call, "Guest");
       });
 
-      /* 5. PeerJS errors */
+      /* 4. PeerJS-level errors */
       peer.on("error", (err) => {
-        console.error("PeerJS error:", err);
+        console.error("PeerJS error:", err.type, err);
+        if (destroyedRef.current) return;
+
         if (err.type === "unavailable-id") {
-          addMsg("Room code already in use. Please start a new meeting.", "system");
+          // Host ID taken — room code already has an active host
+          addMsg("This room code is already active. If you are the host, refresh and try again.", "system");
+          setPeerStatus("error");
         } else if (err.type === "peer-unavailable") {
-          addMsg(`Room "${roomCode}" not found. Check the code and try again.`, "system");
+          // Guest got this from call() — handled by retry logic, ignore here
+        } else if (err.type === "network" || err.type === "server-error") {
+          addMsg("Network error — check your connection and refresh.", "system");
+          setPeerStatus("error");
         } else {
-          addMsg("Connection error: " + err.message, "system");
+          addMsg("Connection error: " + (err.message || err.type), "system");
+          setPeerStatus("error");
         }
-        setPeerStatus("error");
+      });
+
+      peer.on("disconnected", () => {
+        if (destroyedRef.current) return;
+        console.warn("PeerJS disconnected — reconnecting…");
+        peer.reconnect();
       });
     }
 
     init();
 
-    /* Cleanup on unmount */
     return () => {
+      destroyedRef.current = true;
+      clearTimeout(retryTimerRef.current);
       activeCall.current?.close();
       peerRef.current?.destroy();
       localStream.current?.getTracks().forEach((t) => t.stop());
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
-      }
+      recognitionRef.current?.stop();
     };
-  }, []);  // eslint-disable-line
+  }, []); // eslint-disable-line
 
-  /* Scroll chat to bottom on new message */
+  /* Scroll chat on new message */
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  /* ── Toggle mic ── */
+  /* ── Groq sentence suggestion ── */
+  const getSuggestion = useCallback(async (signWord) => {
+    setIsThinking(true);
+    try {
+      const allMsgs = messagesRef.current.filter(m => m.sender !== "system" && m.type !== "sign");
+      const history = allMsgs.length > 0 ? [allMsgs[allMsgs.length - 1]] : [];
+
+      let historyForGroq  = history;
+      let isAlreadyReplied = false;
+      if (history.length > 0 && history[0].sender === "remote") {
+        if (lastRepliedToMessageIdRef.current === history[0].id) {
+          isAlreadyReplied = true;
+          historyForGroq   = [];
+        }
+      }
+
+      const res = await fetch(`${import.meta.env.VITE_API_URL || "http://localhost:8000"}/suggest`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({
+          sign_word: signWord,
+          history:   historyForGroq.map(m => ({
+            sender: m.sender === "local" ? "me" : "them",
+            text:   m.text,
+          })),
+        }),
+      });
+
+      if (!res.ok) throw new Error(`Server error: ${res.status}`);
+      const data = await res.json();
+
+      if (data.sentence?.trim()) {
+        setInputText(data.sentence);
+        inputSourceRef.current = "sign";
+      } else {
+        setInputText(signWord.charAt(0).toUpperCase() + signWord.slice(1));
+        inputSourceRef.current = "sign";
+      }
+    } catch (e) {
+      console.error("Suggestion failed:", e);
+      setInputText(signWord.charAt(0).toUpperCase() + signWord.slice(1));
+      inputSourceRef.current = "sign";
+    } finally {
+      setIsThinking(false);
+    }
+  }, []);
+
+  const onWordDetected = useCallback((word) => getSuggestion(word), [getSuggestion]);
+
+  const getConversationContext = useCallback(() =>
+    messagesRef.current
+      .filter(m => m.sender !== "system" && m.type !== "sign")
+      .slice(-3)
+      .map(m => m.text)
+      .join(" ")
+  , []);
+
+  const { canvasRef: handCanvasRef, handsDetected, wsConnected, debugInfo } =
+    useHandDetection(localVideoRef, camOn, onWordDetected, getConversationContext);
+
+  /* ── Controls ── */
   function toggleMic() {
     if (!localStream.current) return;
     const next = !micOn;
-    if (next) {
-      // Turn off STT if on
-      if (sttOn) {
-        setSttOn(false);
-        if (recognitionRef.current) {
-          recognitionRef.current.stop();
-          recognitionRef.current = null;
-        }
-      }
+    if (next && sttOn) {
+      setSttOn(false);
+      recognitionRef.current?.stop();
+      recognitionRef.current = null;
     }
     localStream.current.getAudioTracks().forEach((t) => (t.enabled = next));
     setMicOn(next);
   }
 
-  /* ── Toggle camera ── */
   function toggleCam() {
     if (!localStream.current) return;
     const next = !camOn;
@@ -309,117 +339,75 @@ export default function CallRoom({ roomCode, isHost, onLeave }) {
     setCamOn(next);
   }
 
-  /* ── Toggle speech-to-text ── */
   function toggleStt() {
     const next = !sttOn;
     setSttOn(next);
-
     if (next) {
-      // Turn off mic if on
       if (micOn) {
         setMicOn(false);
-        localStream.current.getAudioTracks().forEach((t) => (t.enabled = false));
+        localStream.current?.getAudioTracks().forEach((t) => (t.enabled = false));
       }
-
-      // Start speech recognition
-      if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+      if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {
         addMsg("Speech recognition not supported in this browser.", "system");
         setSttOn(false);
         return;
       }
-
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = false;
-      recognition.lang = 'en-US';
-
-      recognition.onresult = (event) => {
-        const transcript = event.results[event.results.length - 1][0].transcript;
-        console.log('Speech recognized:', transcript);
-        setInputText(prev => prev + (prev ? ' ' : '') + transcript);
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const r  = new SR();
+      r.continuous        = true;
+      r.interimResults    = false;
+      r.lang              = "en-US";
+      r.onresult = (e) => {
+        const t = e.results[e.results.length - 1][0].transcript;
+        setInputText(prev => prev + (prev ? " " : "") + t);
       };
-
-      recognition.onerror = (event) => {
-        console.error('Speech recognition error:', event.error);
-        addMsg("Speech recognition error: " + event.error, "system");
-        setSttOn(false);
-      };
-
-      recognition.onend = () => {
-        if (recognitionRef.current) {
-          // Restart if still enabled
-          try {
-            recognition.start();
-          } catch (e) {
-            console.error('Failed to restart speech recognition:', e);
-          }
-        }
-      };
-
-      recognitionRef.current = recognition;
-      try {
-        recognition.start();
-      } catch (e) {
-        console.error('Failed to start speech recognition:', e);
-        addMsg("Failed to start speech recognition. Please check microphone permissions.", "system");
+      r.onerror = () => setSttOn(false);
+      r.onend   = () => { if (recognitionRef.current) { try { r.start(); } catch {} } };
+      recognitionRef.current = r;
+      try { r.start(); } catch {
+        addMsg("Failed to start speech recognition.", "system");
         setSttOn(false);
         recognitionRef.current = null;
       }
     } else {
-      // Stop speech recognition
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
-        recognitionRef.current = null;
-      }
+      recognitionRef.current?.stop();
+      recognitionRef.current = null;
     }
   }
 
-  /* ── Send chat message ── */
   function sendMessage() {
     const text = inputText.trim();
     if (!text) return;
-    
-    // Determine message type: "sign" if from auto-generation, "text" if manually typed
-    const messageType = inputSourceRef.current === "sign" ? "sign" : "text";
-    addMsg(text, "local", messageType);
-    
-    // ── If this was a sign-generated message, mark that we replied to the current message ──
-    if (messageType === "sign") {
-      // Find the last message from the other person (exclude system & auto-sign messages)
-      const allMessages = messagesRef.current
-        .filter(m => m.sender !== "system" && m.type !== "sign");
-      if (allMessages.length > 0 && allMessages[allMessages.length - 1].sender === "remote") {
-        const lastRemoteMessageId = allMessages[allMessages.length - 1].id;
-        lastRepliedToMessageIdRef.current = lastRemoteMessageId;
-        console.log(`✓ Marked as replied to message ID: ${lastRemoteMessageId}`);
+    const msgType = inputSourceRef.current === "sign" ? "sign" : "text";
+    addMsg(text, "local", msgType);
+    if (msgType === "sign") {
+      const allMsgs = messagesRef.current.filter(m => m.sender !== "system" && m.type !== "sign");
+      if (allMsgs.length > 0 && allMsgs[allMsgs.length - 1].sender === "remote") {
+        lastRepliedToMessageIdRef.current = allMsgs[allMsgs.length - 1].id;
       }
     }
-    
     setInputText("");
-    inputSourceRef.current = "manual";  // Reset for next input
+    inputSourceRef.current = "manual";
   }
 
-  /* ── Leave call ── */
   function handleLeave() {
+    destroyedRef.current = true;
+    clearTimeout(retryTimerRef.current);
     activeCall.current?.close();
     peerRef.current?.destroy();
     localStream.current?.getTracks().forEach((t) => t.stop());
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
-      recognitionRef.current = null;
-    }
+    recognitionRef.current?.stop();
     setSttOn(false);
     onLeave();
   }
 
   /* ── Status badge ── */
   const statusInfo = {
-    connecting: { color: "#f0c040", text: "Connecting…"      },
-    waiting:    { color: "#4ecda4", text: "Waiting for guest…"},
-    connected:  { color: "#4ecda4", text: "Live"             },
-    error:      { color: "#e85d60", text: "Error"            },
-  }[peerStatus];
+    connecting: { color: "#f0c040", text: "Connecting…"       },
+    waiting:    { color: "#4ecda4", text: "Waiting for guest…" },
+    connected:  { color: "#4ecda4", text: "Live"              },
+    error:      { color: "#e85d60", text: "Error"             },
+  }[peerStatus] ?? { color: "#f0c040", text: "…" };
 
   const remoteConnected = peerStatus === "connected";
 
@@ -446,35 +434,21 @@ export default function CallRoom({ roomCode, isHost, onLeave }) {
           <div className={styles.roomChip}>
             <span className={styles.roomChipIcon}><IconCam /></span>
             <span className={styles.roomCode}>{roomCode}</span>
-            {/* Live status dot */}
-            <span className={styles.statusDot} style={{ background: statusInfo.color }} title={statusInfo.text} />
+            <span className={styles.statusDot} style={{ background: statusInfo.color }} />
             <span className={styles.statusText} style={{ color: statusInfo.color }}>
               {statusInfo.text}
             </span>
-            <button className={styles.chipBtn} title="Options"><IconDots /></button>
+            <button className={styles.chipBtn}><IconDots /></button>
           </div>
         </div>
-
         <div className={styles.topRight}>
-          <button
-            className={`${styles.ctrlBtn} ${sttOn ? styles.ctrlOn : styles.ctrlOff}`}
-            onClick={toggleStt}
-            title={sttOn ? "Stop speech-to-text" : "Start speech-to-text"}
-          >
+          <button className={`${styles.ctrlBtn} ${sttOn ? styles.ctrlOn : styles.ctrlOff}`} onClick={toggleStt} title={sttOn ? "Stop STT" : "Start STT"}>
             {sttOn ? <IconStt /> : <IconSttOff />}
           </button>
-          <button
-            className={`${styles.ctrlBtn} ${micOn ? styles.ctrlOn : styles.ctrlOff}`}
-            onClick={toggleMic}
-            title={micOn ? "Mute" : "Unmute"}
-          >
+          <button className={`${styles.ctrlBtn} ${micOn ? styles.ctrlOn : styles.ctrlOff}`} onClick={toggleMic} title={micOn ? "Mute" : "Unmute"}>
             {micOn ? <IconMic /> : <IconMicOff />}
           </button>
-          <button
-            className={`${styles.ctrlBtn} ${camOn ? styles.ctrlOn : styles.ctrlOff}`}
-            onClick={toggleCam}
-            title={camOn ? "Camera off" : "Camera on"}
-          >
+          <button className={`${styles.ctrlBtn} ${camOn ? styles.ctrlOn : styles.ctrlOff}`} onClick={toggleCam} title={camOn ? "Camera off" : "Camera on"}>
             {camOn ? <IconCam /> : <IconCamOff />}
           </button>
           <button className={`${styles.ctrlBtn} ${styles.ctrlEnd}`} onClick={handleLeave} title="Leave">
@@ -486,110 +460,40 @@ export default function CallRoom({ roomCode, isHost, onLeave }) {
 
       {/* ── MAIN ── */}
       <div className={styles.main}>
-
-        {/* Video panels */}
         <div className={styles.videoRow}>
 
-          {/* Local video — You */}
+          {/* Local video */}
           <div className={styles.videoCard}>
-            <video
-              ref={localVideoRef}
-              autoPlay playsInline muted
-              className={`${styles.videoEl} ${camOn ? styles.videoVisible : styles.videoHidden}`}
-            />
-            {/* Hand landmark overlay — sits on top of video */}
-            {camOn && (
-              <canvas ref={handCanvasRef} className={styles.handCanvas} />
-            )}
+            <video ref={localVideoRef} autoPlay playsInline muted
+              className={`${styles.videoEl} ${camOn ? styles.videoVisible : styles.videoHidden}`} />
+            {camOn && <canvas ref={handCanvasRef} className={styles.handCanvas} />}
 
-            {/* Prediction buffer display */}
             {camOn && debugInfo && (
               <div className={styles.debugPanel}>
-                {/* Status */}
                 <div className={styles.debugRow}>
                   <span className={styles.debugFinger}>status</span>
-                  <span className={styles.debugVal}
-                    style={{ color: debugInfo.status === "accepted" ? "#4ecda4" : "rgba(200,190,255,0.6)" }}>
+                  <span className={styles.debugVal} style={{ color: debugInfo.status === "accepted" ? "#4ecda4" : "rgba(200,190,255,0.6)" }}>
                     {debugInfo.status}
                   </span>
                 </div>
-
-                {/* Top word model sees */}
                 {debugInfo.top_word && (
                   <div className={styles.debugRow}>
                     <span className={styles.debugFinger}>sees</span>
-                    <span className={styles.debugVal}>
-                      {debugInfo.top_word} {Math.round((debugInfo.confidence || 0) * 100)}%
-                    </span>
+                    <span className={styles.debugVal}>{debugInfo.top_word} {Math.round((debugInfo.confidence || 0) * 100)}%</span>
                   </div>
                 )}
-
-                {/* Layer 1: Position */}
-                {debugInfo.position && (
-                  <div className={styles.debugRow}>
-                    <span className={styles.debugFinger}>pos</span>
-                    <span className={styles.debugVal} style={{ color: "#f0c040" }}>
-                      {debugInfo.position.join(", ")}
-                    </span>
-                  </div>
-                )}
-
-                {/* Layer 2: Movement */}
-                {debugInfo.movement && (
-                  <div className={styles.debugRow}>
-                    <span className={styles.debugFinger}>mov</span>
-                    <span className={styles.debugVal} style={{ color: "#5a8ef0" }}>
-                      {debugInfo.movement.join(", ")}
-                    </span>
-                  </div>
-                )}
-
-                {/* Layer 3: Fingers */}
-                {debugInfo.fingers && (
-                  <div className={styles.debugRow}>
-                    <span className={styles.debugFinger}>fin</span>
-                    <span className={styles.debugVal} style={{ color: "#4ecda4" }}>
-                      {debugInfo.fingers.join(", ")}
-                    </span>
-                  </div>
-                )}
-
-                {/* Candidates after filter */}
-                {debugInfo.candidates && (
-                  <div className={styles.debugRow}>
-                    <span className={styles.debugFinger}>opts</span>
-                    <span className={styles.debugVal} style={{ fontSize: "0.65rem" }}>
-                      {debugInfo.candidates.join(" ")}
-                    </span>
-                  </div>
-                )}
-
-                {/* Votes */}
-                {debugInfo.votes && (
-                  <div className={styles.debugRow}>
-                    <span className={styles.debugFinger}>votes</span>
-                    <span className={styles.debugVal}>{debugInfo.votes}</span>
-                  </div>
-                )}
-
-                {/* Buffer progress */}
                 {debugInfo.buffer !== undefined && (
                   <div className={styles.debugRow}>
                     <span className={styles.debugFinger}>buf</span>
-                    <span className={styles.debugVal}>
-                      {debugInfo.buffer}/{debugInfo.needed}
-                    </span>
+                    <span className={styles.debugVal}>{debugInfo.buffer}/{debugInfo.needed}</span>
                   </div>
                 )}
-
-                {/* Big result */}
                 <div className={styles.debugSign}>
-                  {debugInfo?.status === "accepted"
-                    ? `✓ ${debugInfo.word}`
-                    : handsDetected ? "detecting…" : "show hand"}
+                  {debugInfo?.status === "accepted" ? `✓ ${debugInfo.word}` : handsDetected ? "detecting…" : "show hand"}
                 </div>
               </div>
             )}
+
             {!camOn && (
               <div className={styles.videoPlaceholder}>
                 <div className={styles.avatarCircle}><IconUser /></div>
@@ -597,85 +501,64 @@ export default function CallRoom({ roomCode, isHost, onLeave }) {
             )}
             <div className={styles.nameTag}>
               <span className={styles.nameTagMic}><IconMicSm /></span>
-              {isHost ? "Unknown1 (You)" : "Unknown2 (You)"}
+              {isHost ? "You (Host)" : "You (Guest)"}
             </div>
             {camOn && (
-              <div className={styles.liveTag}
-                style={{ background: wsConnected ? "#4ecda4" : "#e85d60" }}>
+              <div className={styles.liveTag} style={{ background: wsConnected ? "#4ecda4" : "#e85d60" }}>
                 {wsConnected ? "LIVE" : "NO SERVER"}
               </div>
             )}
           </div>
 
-          {/* Remote video — Other person */}
+          {/* Remote video */}
           <div className={styles.videoCard}>
-            <video
-              ref={remoteVideoRef}
-              autoPlay playsInline
-              className={`${styles.videoEl} ${remoteConnected ? styles.videoVisible : styles.videoHidden}`}
-            />
+            <video ref={remoteVideoRef} autoPlay playsInline
+              className={`${styles.videoEl} ${remoteConnected ? styles.videoVisible : styles.videoHidden}`} />
             {!remoteConnected && (
               <div className={styles.videoPlaceholder}>
                 <div className={styles.avatarCircle}><IconUser /></div>
                 <p className={styles.waitingText}>
-                  {peerStatus === "error" ? "Connection failed" : "Waiting to join…"}
+                  {peerStatus === "error" ? "Connection failed — check room code" : "Waiting to join…"}
                 </p>
               </div>
             )}
             {remoteConnected && (
               <div className={styles.nameTag}>
                 <span className={styles.nameTagMic}><IconMicSm /></span>
-                {remoteUser || "Unknown"}
+                {remoteUser || "Guest"}
               </div>
             )}
           </div>
         </div>
 
-        {/* Bottom: avatars + chat */}
+        {/* Bottom section */}
         <div className={styles.bottomSection}>
-
-          {/* Left avatar space */}
           <div className={styles.avatarSpace}>
             <div className={styles.avatarSpaceInner}>
               <span className={styles.avatarSpaceLabel}>Avatar space</span>
             </div>
           </div>
 
-          {/* Chat */}
           <div className={styles.chatColumn}>
-
-            {/* Test mode — simulates other person, remove when real user joins */}
             {peerStatus !== "connected" && (
               <div className={styles.testBar}>
                 <span className={styles.testLabel}>🧪 Test</span>
                 {["Hi! How are you?", "Are you hungry?", "Where are you going?", "Feeling okay?"].map(msg => (
-                  <button key={msg} className={styles.testBtn}
-                    onClick={() => addMsg(msg, "remote")}>
-                    {msg}
-                  </button>
+                  <button key={msg} className={styles.testBtn} onClick={() => addMsg(msg, "remote")}>{msg}</button>
                 ))}
               </div>
             )}
 
             <div className={styles.chatMessages}>
               {messages.map((m) => (
-                <div
-                  key={m.id}
-                  className={
-                    m.sender === "system"
-                      ? styles.bubbleSystem
-                      : m.sender === "local"
-                      ? `${styles.bubble} ${styles.bubbleLocal}`
-                      : `${styles.bubble} ${styles.bubbleRemote}`
-                  }
-                >
-                  {m.type === "sign" && (
-                    <span style={{ marginRight: 6, opacity: 0.8 }}>🤚</span>
-                  )}
+                <div key={m.id} className={
+                  m.sender === "system"  ? styles.bubbleSystem :
+                  m.sender === "local"   ? `${styles.bubble} ${styles.bubbleLocal}` :
+                                           `${styles.bubble} ${styles.bubbleRemote}`
+                }>
+                  {m.type === "sign" && <span style={{ marginRight: 6, opacity: 0.8 }}>🤚</span>}
                   {m.text}
-                  {m.sender !== "system" && (
-                    <span className={styles.bubbleTime}>{m.time}</span>
-                  )}
+                  {m.sender !== "system" && <span className={styles.bubbleTime}>{m.time}</span>}
                 </div>
               ))}
               <div ref={chatEndRef} />
@@ -683,29 +566,18 @@ export default function CallRoom({ roomCode, isHost, onLeave }) {
 
             <div className={styles.inputBar}>
               <button className={styles.inputIconBtn}><IconPlus /></button>
-              <button 
-                className={`${styles.inputIconBtn} ${sttOn ? styles.inputIconActive : ''}`}
-                onClick={toggleStt}
-                title={sttOn ? "Stop speech-to-text" : "Start speech-to-text"}
-              >
+              <button className={`${styles.inputIconBtn} ${sttOn ? styles.inputIconActive : ""}`} onClick={toggleStt}>
                 {sttOn ? <IconMic /> : <IconMicOff />}
               </button>
               <div className={styles.inputWrapper}>
                 {isThinking && (
-                  <div className={styles.thinkingBadge}>
-                    <span />
-                    <span />
-                    <span />
-                  </div>
+                  <div className={styles.thinkingBadge}><span /><span /><span /></div>
                 )}
                 <input
                   className={styles.inputField}
                   placeholder={isThinking ? "Generating sentence…" : "Type or sign a message…"}
                   value={inputText}
-                  onChange={(e) => {
-                    setInputText(e.target.value);
-                    inputSourceRef.current = "manual";  // User is typing manually
-                  }}
+                  onChange={(e) => { setInputText(e.target.value); inputSourceRef.current = "manual"; }}
                   onKeyDown={(e) => { if (e.key === "Enter") sendMessage(); }}
                 />
               </div>
@@ -714,7 +586,6 @@ export default function CallRoom({ roomCode, isHost, onLeave }) {
             </div>
           </div>
 
-          {/* Right avatar space */}
           <div className={styles.avatarSpace}>
             <div className={styles.avatarSpaceInner}>
               <span className={styles.avatarSpaceLabel}>Avatar space</span>
