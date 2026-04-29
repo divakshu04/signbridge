@@ -131,7 +131,19 @@ async def signaling(ws: WebSocket, room: str, role: str):
     # Register in room
     if room not in rooms:
         rooms[room] = {"host": None, "guest": None}
+    
+    if rooms[room]["host"] is None:
+        role = "host"
+    elif rooms[room]["guest"] is None:
+        role = "guest"
+    else:
+        await ws.send_text(json.dumps({"type": "error", "message": "Room is full"}))
+        await ws.close()
+        return
     rooms[room][role] = ws
+    print(f"[signal] {role} assigned to room={room} (requested: {role})")
+
+    await safe_send(ws, {"type": "assigned_role", "role": role})
 
     other_role = "guest" if role == "host" else "host"
 

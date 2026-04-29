@@ -1,3 +1,4 @@
+const [localIsHost, setLocalIsHost] = useState(isHost);
 import { useState, useRef, useEffect, useCallback } from "react";
 import StarCanvas from "../components/StarCanvas";
 import { useHandDetection } from "../hooks/useHandDetection";
@@ -128,22 +129,26 @@ export default function CallRoom({ roomCode, isHost, onLeave }) {
         console.log("[signal] ←", msg.type);
         switch (msg.type) {
           case "ready":
-            if (!isHost) await startOffer();
+            if (!localIsHost) {
+                await startOffer();
+            }
             break;
-          case "wait_for_host":
-            setStatusMsg("Host not in room yet — waiting…");
-            addMsg("Host hasn't joined yet. They need to open the room first.", "system");
-            break;
-          case "guest_joined":
-            if (isHost) { setPeerStatus("connecting"); setStatusMsg("Guest found — connecting…"); addMsg("Someone is joining…", "system"); }
+          case "assigned_role":
+            const assignedAsHost = (msg.role === "host");
+            setLocalIsHost(assignedAsHost);
+            if (assignedAsHost) {
+              setStatusMsg("Waiting for guest...");
+            }else {
+              setStatusMsg("Connecting to host...");
+            }
             break;
           case "offer":
-            if (isHost) {
-              const conn = createPC();
-              await conn.setRemoteDescription(new RTCSessionDescription(msg.sdp));
-              const answer = await conn.createAnswer();
-              await conn.setLocalDescription(answer);
-              sendSig({ type: "answer", sdp: conn.localDescription });
+            if (localIsHost) {
+                const conn = createPC();
+                await conn.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+                const answer = await conn.createAnswer();
+                await conn.setLocalDescription(answer);
+                sendSig({ type: "answer", sdp: conn.localDescription });
             }
             break;
           case "answer":
