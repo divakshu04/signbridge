@@ -20,15 +20,19 @@ load_dotenv()
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(BASE_DIR, "signbridge_model.keras")
 
-with open(os.path.join(BASE_DIR, "model_config.json")) as f:
-    config = json.load(f)
-with open(os.path.join(BASE_DIR, "label_map.json")) as f:
-    IDX_TO_SIGN = {int(k): v for k, v in json.load(f).items()}
+# Load configurations safely
+try:
+    with open(os.path.join(BASE_DIR, "model_config.json")) as f:
+        config = json.load(f)
+    with open(os.path.join(BASE_DIR, "label_map.json")) as f:
+        IDX_TO_SIGN = {int(k): v for k, v in json.load(f).items()}
 
-SIGNS        = config["signs"]
-SEQUENCE_LEN = config["sequence_length"]
-FEATURES     = config["features"]
-SIGN_TO_IDX  = {v: k for k, v in IDX_TO_SIGN.items()}
+    SIGNS        = config["signs"]
+    SEQUENCE_LEN = config["sequence_length"]
+    FEATURES     = config["features"]
+    SIGN_TO_IDX  = {v: k for k, v in IDX_TO_SIGN.items()}
+except Exception as e:
+    print(f"Error loading config files: {e}")
 
 # ─────────────────────────────────────────────────────────────────────
 # Signaling state
@@ -112,105 +116,79 @@ async def safe_send(ws: WebSocket, data: dict):
 
 # ─────────────────────────────────────────────────────────────────────
 # Signaling  /ws/signal/{room}/{role}
-#
-# Protocol (dead simple):
-#   Server → guest:  {"type":"ready"}          ← "host is here, make your offer"
-#   Server → host:   {"type":"guest_joined"}   ← "someone joined, standby"
-#   Guest  → server: {"type":"offer",  sdp}    ← forwarded to host
-#   Host   → server: {"type":"answer", sdp}    ← forwarded to guest
-#   Both   → server: {"type":"ice", candidate} ← forwarded to other
 # ─────────────────────────────────────────────────────────────────────
-@app.websocket("/ws/signal/{room}/{role}")
-async def signaling(ws: WebSocket, room: str, role: str):
-    if role not in ("host", "guest"):
-        await ws.close(code=4000); return
-
+@app.websocket("/ws/signal/{room}/{requested_role}")
+async def signaling(ws: WebSocket, room: str, requested_role: str):
     await ws.accept()
-    print(f"[signal] {role} connected  room={room}")
-
-    # Register in room
+    
+    # Initialize room if it doesn't exist
     if room not in rooms:
         rooms[room] = {"host": None, "guest": None}
     
+    # Assign actual role based on availability
+    assigned_role = None
     if rooms[room]["host"] is None:
-        role = "host"
+        assigned_role = "host"
     elif rooms[room]["guest"] is None:
-        role = "guest"
+        assigned_role = "guest"
     else:
-        await ws.send_text(json.dumps({"type": "error", "message": "Room is full"}))
+        await safe_send(ws, {"type": "error", "message": "Room is full"})
         await ws.close()
         return
-    rooms[room][role] = ws
-    print(f"[signal] {role} assigned to room={room} (requested: {role})")
 
-    await safe_send(ws, {"type": "assigned_role", "role": role})
+    rooms[room][assigned_role] = ws
+    print(f"[signal] {assigned_role} joined room={room}")
 
-    other_role = "guest" if role == "host" else "host"
+    # Tell the client what role they actually have
+    await safe_send(ws, {"type": "assigned_role", "role": assigned_role})
+
+    # Check if we can start the connection
+    host_ws = rooms[room]["host"]
+    guest_ws = rooms[room]["guest"]
+
+    if host_ws and guest_ws:
+        # Both are here. In our protocol, the guest initiates the offer.
+        await safe_send(guest_ws, {"type": "ready"})
+        print(f"[signal] Room {room} is ready. Sent start signal to guest.")
+
+    other_role = "guest" if assigned_role == "host" else "host"
 
     try:
-        # ── Notify both peers about current state ──────────────────
-        if role == "host":
-            # If a guest was already waiting, tell the guest to start
-            if rooms[room]["guest"]:
-                await safe_send(rooms[room]["guest"], {"type": "ready"})
-                await safe_send(ws, {"type": "guest_joined"})
-            # else: host just waits, guest will trigger this when it joins
-
-        elif role == "guest":
-            # Tell guest whether host is present
-            if rooms[room]["host"]:
-                # Host is already here — tell guest to start offer
-                await safe_send(ws, {"type": "ready"})
-                await safe_send(rooms[room]["host"], {"type": "guest_joined"})
-            else:
-                # No host yet — tell guest to wait
-                await safe_send(ws, {"type": "wait_for_host"})
-
-        # ── Message relay loop ─────────────────────────────────────
         while True:
             try:
-                raw  = await asyncio.wait_for(ws.receive_text(), timeout=60.0)
-            except asyncio.TimeoutError:
-                # Send ping to keep connection alive on Render
-                await safe_send(ws, {"type": "ping"})
-                continue
-
-            try:
+                raw = await asyncio.wait_for(ws.receive_text(), timeout=30.0)
                 msg = json.loads(raw)
+                
+                if msg.get("type") == "pong":
+                    continue
+
+                # Forward signaling messages (offer, answer, ice) to the other peer
+                other_ws = rooms.get(room, {}).get(other_role)
+                if other_ws:
+                    await safe_send(other_ws, msg)
+                
+            except asyncio.TimeoutError:
+                await safe_send(ws, {"type": "ping"})
             except Exception:
                 continue
 
-            # Ignore pong
-            if msg.get("type") == "pong":
-                continue
-
-            # Forward everything else to the other peer
-            other_ws = rooms.get(room, {}).get(other_role)
-            if other_ws:
-                await safe_send(other_ws, msg)
-            else:
-                # Other peer not connected yet
-                await safe_send(ws, {"type": "error", "message": "Other peer not connected"})
-
     except WebSocketDisconnect:
-        print(f"[signal] {role} disconnected  room={room}")
-    except Exception as e:
-        print(f"[signal] Error ({role} in {room}): {e}")
+        print(f"[signal] {assigned_role} disconnected from room={room}")
     finally:
-        # Clean up
         if room in rooms:
-            rooms[room][role] = None
-            # Notify other peer that this one left
+            rooms[room][assigned_role] = None
+            # Notify the other person
             other_ws = rooms[room].get(other_role)
             if other_ws:
                 await safe_send(other_ws, {"type": "peer_left"})
-            # Remove room if empty
+            
+            # Clean up empty rooms
             if not rooms[room]["host"] and not rooms[room]["guest"]:
                 del rooms[room]
                 print(f"[signal] Room {room} closed")
 
 # ─────────────────────────────────────────────────────────────────────
-# Sign detection  /ws/signs
+# Sign detection logic
 # ─────────────────────────────────────────────────────────────────────
 def extract_frame(pose, left_hand, right_hand):
     def to_arr(lm, size):
@@ -271,7 +249,6 @@ def make_predictor():
         lw=word;cd=COOLDOWN;vb.clear()
         recent=list(fb)[-(SEQUENCE_LEN//2):]
         fb.clear();fb.extend(recent)
-        print(f"✓ {word} ({conf:.0%})")
         return {"word":word,"confidence":round(conf,3),"status":"accepted"}
 
     def predict(pose,left_hand,right_hand,context=""):
@@ -344,7 +321,6 @@ GENERAL={
 @app.post("/suggest")
 async def suggest_sentence(request: Request):
     if not groq_client: return {"sentence":"","error":"Groq not configured"}
-    body={}; sign_word=""
     try:
         body=await request.json(); sign_word=body.get("sign_word","").strip().lower()
         history=body.get("history",[])
