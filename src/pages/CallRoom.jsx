@@ -217,7 +217,7 @@ export default function CallRoom({ roomCode, isHost, onLeave }) {
       localStream.current?.getTracks().forEach(t => t.stop()); 
       recognitionRef.current?.stop(); 
     };
-  }, [roomCode, isHost, addMsg, createPC, startOffer, sendSig]);
+  }, [roomCode, isHost, addMsg, createPC, startOffer, sendSig, localIsHost]);
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
