@@ -32,7 +32,6 @@ SIGN_TO_IDX  = {v: k for k, v in IDX_TO_SIGN.items()}
 
 # ─────────────────────────────────────────────────────────────────────
 # Signaling state
-# rooms[room_code] = { "host": WebSocket | None, "guest": WebSocket | None }
 # ─────────────────────────────────────────────────────────────────────
 rooms: dict[str, dict] = {}
 
@@ -111,15 +110,7 @@ async def safe_send(ws: WebSocket, data: dict):
         pass
 
 # ─────────────────────────────────────────────────────────────────────
-# Signaling  /ws/signal/{room}/{role}
-#
-# Protocol (dead simple):
-#   Server → guest:  {"type":"ready"}          ← "host is here, make your offer"
-#   Server → host:   {"type":"guest_joined"}   ← "someone joined, standby"
-#   Guest  → server: {"type":"offer",  sdp}    ← forwarded to host
-#   Host   → server: {"type":"answer", sdp}    ← forwarded to guest
-#   Both   → server: {"type":"ice", candidate} ← forwarded to other
-# ─────────────────────────────────────────────────────────────────────
+# Signaling 
 @app.websocket("/ws/signal/{room}/{role}")
 async def signaling(ws: WebSocket, room: str, role: str):
     if role not in ("host", "guest"):
@@ -136,22 +127,16 @@ async def signaling(ws: WebSocket, room: str, role: str):
     other_role = "guest" if role == "host" else "host"
 
     try:
-        # ── Notify both peers about current state ──────────────────
         if role == "host":
-            # If a guest was already waiting, tell the guest to start
             if rooms[room]["guest"]:
                 await safe_send(rooms[room]["guest"], {"type": "ready"})
                 await safe_send(ws, {"type": "guest_joined"})
-            # else: host just waits, guest will trigger this when it joins
 
         elif role == "guest":
-            # Tell guest whether host is present
             if rooms[room]["host"]:
-                # Host is already here — tell guest to start offer
                 await safe_send(ws, {"type": "ready"})
                 await safe_send(rooms[room]["host"], {"type": "guest_joined"})
             else:
-                # No host yet — tell guest to wait
                 await safe_send(ws, {"type": "wait_for_host"})
 
         # ── Message relay loop ─────────────────────────────────────
@@ -168,7 +153,6 @@ async def signaling(ws: WebSocket, room: str, role: str):
             except Exception:
                 continue
 
-            # Ignore pong
             if msg.get("type") == "pong":
                 continue
 
@@ -185,7 +169,6 @@ async def signaling(ws: WebSocket, room: str, role: str):
     except Exception as e:
         print(f"[signal] Error ({role} in {room}): {e}")
     finally:
-        # Clean up
         if room in rooms:
             rooms[room][role] = None
             # Notify other peer that this one left
@@ -198,7 +181,7 @@ async def signaling(ws: WebSocket, room: str, role: str):
                 print(f"[signal] Room {room} closed")
 
 # ─────────────────────────────────────────────────────────────────────
-# Sign detection  /ws/signs
+# Sign detection 
 # ─────────────────────────────────────────────────────────────────────
 def extract_frame(pose, left_hand, right_hand):
     def to_arr(lm, size):
@@ -279,7 +262,9 @@ def make_predictor():
         if _model is None:
             return {"word":None,"status":"no_model","error":_model_error or "not loaded"}
         seq=np.clip(np.array(list(fb),dtype=np.float32),-3.0,3.0)[np.newaxis]
+
         probs=_model.predict(seq,verbose=0)[0]
+        
         probs=correct_probs(probs,get_wrist_info(pose))
         ti=np.argsort(probs)[-5:][::-1]
         ts=[IDX_TO_SIGN[int(i)] for i in ti]; tc=[float(probs[i]) for i in ti]
