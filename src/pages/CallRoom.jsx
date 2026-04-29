@@ -112,14 +112,14 @@ export default function CallRoom({ roomCode, isHost, onLeave }) {
       const safeRoom = roomCode.replace(/[^a-zA-Z0-9-]/g, "");
       const role     = isHost ? "host" : "guest";
       const url      = `${WS_API}/ws/signal/${safeRoom}/${role}`;
-      console.log("[signal] connecting:", url);
+      console.log(`[signal] Connecting as ${role} to room: ${safeRoom}`);
 
       const ws = new WebSocket(url);
       sig.current = ws;
 
       ws.onopen = () => {
-        if (isHost) { setPeerStatus("waiting"); setStatusMsg(`Waiting for guest — share code "${roomCode}"`); addMsg(`Room ready — share code "${roomCode}" with the other person.`, "system"); }
-        else        { setStatusMsg("Connected — looking for host…"); addMsg("Looking for host…", "system"); }
+        if (isHost) { setPeerStatus("waiting"); setStatusMsg(`Waiting for guest — share code "${roomCode}"`); addMsg(`Room ready as HOST. Share code "${roomCode}" with the guest.`, "system"); }
+        else        { setPeerStatus("connecting"); setStatusMsg("Connected — looking for host…"); addMsg("Joined as GUEST. Looking for host…", "system"); }
       };
 
       ws.onmessage = async (e) => {

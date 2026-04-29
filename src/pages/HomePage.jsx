@@ -145,7 +145,12 @@ export default function HomePage({ onEnterRoom, onLearnASL, onLearnNumbers }) {
         <Modal
           type={modal}
           onClose={() => setModal(null)}
-          onEnterRoom={(code, isHost) => { setModal(null); onEnterRoom(code, isHost); }}
+          onEnterRoom={(code) => {
+            // Explicitly determine role based on which modal is open
+            const isHosting = modal === "meet";
+            setModal(null);
+            onEnterRoom(code, isHosting);
+          }}
           onNavigate={(page) => {
             setModal(null);
             if (page === "learn-asl") onLearnASL?.(); else if (page === "learn-numbers") onLearnNumbers?.();
