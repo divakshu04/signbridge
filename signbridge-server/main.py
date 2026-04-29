@@ -118,74 +118,81 @@ async def safe_send(ws: WebSocket, data: dict):
 # Signaling  /ws/signal/{room}/{role}
 # ─────────────────────────────────────────────────────────────────────
 @app.websocket("/ws/signal/{room}/{requested_role}")
+@app.websocket("/ws/signal/{room}/{requested_role}")
 async def signaling(ws: WebSocket, room: str, requested_role: str):
     await ws.accept()
     
-    # Initialize room if it doesn't exist
+    # Initialize room if it's new
     if room not in rooms:
         rooms[room] = {"host": None, "guest": None}
-    
-    # Assign actual role based on availability
-    assigned_role = None
-    if rooms[room]["host"] is None:
+
+    # --- STRICT ROLE ASSIGNMENT ---
+    # We check if your requested role is actually available.
+    # If you asked for 'host' and no one is host, you ARE the host.
+    if requested_role == "host" and rooms[room]["host"] is None:
+        assigned_role = "host"
+    elif requested_role == "guest" and rooms[room]["guest"] is None:
+        assigned_role = "guest"
+    # Fallback: If your choice was taken, take the other slot if empty
+    elif rooms[room]["host"] is None:
         assigned_role = "host"
     elif rooms[room]["guest"] is None:
         assigned_role = "guest"
     else:
+        # Both slots are truly full
         await safe_send(ws, {"type": "error", "message": "Room is full"})
         await ws.close()
         return
 
+    # Lock this websocket into the assigned role
     rooms[room][assigned_role] = ws
-    print(f"[signal] {assigned_role} joined room={room}")
+    print(f"[Signal] User joined as {assigned_role} in room: {room}")
 
-    # Tell the client what role they actually have
+    # Tell the frontend IMMEDIATELY what it is. 
+    # This prevents the frontend from guessing or flipping.
     await safe_send(ws, {"type": "assigned_role", "role": assigned_role})
 
-    # Check if we can start the connection
-    host_ws = rooms[room]["host"]
-    guest_ws = rooms[room]["guest"]
-
-    if host_ws and guest_ws:
-        # Both are here. In our protocol, the guest initiates the offer.
-        await safe_send(guest_ws, {"type": "ready"})
-        print(f"[signal] Room {room} is ready. Sent start signal to guest.")
-
+    # --- HANDSHAKE TRIGGER ---
     other_role = "guest" if assigned_role == "host" else "host"
+    other_ws = rooms[room].get(other_role)
+
+    if other_ws:
+        # Both users are now present.
+        # We tell the Guest to start the WebRTC offer.
+        if assigned_role == "guest":
+            await safe_send(ws, {"type": "ready"})
+        else:
+            await safe_send(other_ws, {"type": "ready"})
 
     try:
         while True:
-            try:
-                raw = await asyncio.wait_for(ws.receive_text(), timeout=30.0)
-                msg = json.loads(raw)
-                
-                if msg.get("type") == "pong":
-                    continue
-
-                # Forward signaling messages (offer, answer, ice) to the other peer
-                other_ws = rooms.get(room, {}).get(other_role)
-                if other_ws:
-                    await safe_send(other_ws, msg)
-                
-            except asyncio.TimeoutError:
-                await safe_send(ws, {"type": "ping"})
-            except Exception:
+            # We use a 60s timeout to keep the connection alive
+            raw = await asyncio.wait_for(ws.receive_text(), timeout=60.0)
+            msg = json.loads(raw)
+            
+            if msg.get("type") == "pong":
                 continue
 
-    except WebSocketDisconnect:
-        print(f"[signal] {assigned_role} disconnected from room={room}")
+            # Forward the SDP (Offer/Answer) or ICE candidates to the other person
+            target = rooms[room].get(other_role)
+            if target:
+                await safe_send(target, msg)
+
+    except (WebSocketDisconnect, asyncio.TimeoutError):
+        print(f"[Signal] {assigned_role} left room: {room}")
     finally:
+        # Clean up ONLY the role that disconnected
         if room in rooms:
             rooms[room][assigned_role] = None
-            # Notify the other person
-            other_ws = rooms[room].get(other_role)
-            if other_ws:
-                await safe_send(other_ws, {"type": "peer_left"})
             
-            # Clean up empty rooms
+            # Notify the remaining person that the peer left
+            remaining_peer = rooms[room].get(other_role)
+            if remaining_peer:
+                await safe_send(remaining_peer, {"type": "peer_left"})
+            
+            # If both are gone, delete the room
             if not rooms[room]["host"] and not rooms[room]["guest"]:
                 del rooms[room]
-                print(f"[signal] Room {room} closed")
 
 # ─────────────────────────────────────────────────────────────────────
 # Sign detection logic
