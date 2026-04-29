@@ -159,9 +159,11 @@ async def signaling(ws: WebSocket, room: str, role: str):
             # Forward everything else to the other peer
             other_ws = rooms.get(room, {}).get(other_role)
             if other_ws:
+                print(f"[relay] {msg.get('type')} from {role} to {other_role} in {room}")
                 await safe_send(other_ws, msg)
             else:
                 # Other peer not connected yet
+                print(f"[relay failed] {other_role} not connected in {room}")
                 await safe_send(ws, {"type": "error", "message": "Other peer not connected"})
 
     except WebSocketDisconnect:
