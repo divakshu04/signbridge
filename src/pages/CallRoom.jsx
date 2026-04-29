@@ -152,15 +152,15 @@ export default function CallRoom({ roomCode, isHost, onLeave }) {
             }
             break;
           case "answer":
-            if (!isHost && pc.current) { await pc.current.setRemoteDescription(new RTCSessionDescription(msg.sdp)); makingOffer.current = false; }
+            if (!localIsHost && pc.current) { await pc.current.setRemoteDescription(new RTCSessionDescription(msg.sdp)); makingOffer.current = false; }
             break;
           case "ice":
             if (pc.current?.remoteDescription) try { await pc.current.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch {}
             break;
           case "peer_left":
-            setPeerStatus("waiting"); setStatusMsg(isHost ? "Guest left." : "Host left.");
+            setPeerStatus("waiting"); setStatusMsg(localIsHost ? "Guest left." : "Host left.");
             if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
-            addMsg(isHost ? "Guest left the room." : "Host left the room.", "system");
+            addMsg(localIsHost ? "Guest left the room." : "Host left the room.", "system");
             makingOffer.current = false;
             break;
           case "ping": sendSig({ type: "pong" }); break;
