@@ -53,6 +53,7 @@ export default function CallRoom({ roomCode, isHost, onLeave }) {
   const recognitionRef = useRef(null);
   const dead           = useRef(false);
   const makingOffer    = useRef(false);
+  const iceQueue       = useRef([]);
 
   const addMsg = useCallback((text, sender, type = "text") => {
     const msg = { id: Date.now() + Math.random(), text, sender, type,
@@ -141,19 +142,31 @@ export default function CallRoom({ roomCode, isHost, onLeave }) {
             if (isHost) {
               const conn = createPC();
               await conn.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+              while (iceQueue.current.length > 0) { try { await conn.addIceCandidate(new RTCIceCandidate(iceQueue.current.shift())); } catch {} }
               const answer = await conn.createAnswer();
               await conn.setLocalDescription(answer);
               sendSig({ type: "answer", sdp: conn.localDescription });
             }
             break;
           case "answer":
-            if (!isHost && pc.current) { await pc.current.setRemoteDescription(new RTCSessionDescription(msg.sdp)); makingOffer.current = false; }
+            if (!isHost && pc.current) {
+              await pc.current.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+              while (iceQueue.current.length > 0) { try { await pc.current.addIceCandidate(new RTCIceCandidate(iceQueue.current.shift())); } catch {} }
+              makingOffer.current = false;
+            }
             break;
           case "ice":
-            if (pc.current?.remoteDescription) try { await pc.current.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch {}
+            if (pc.current?.remoteDescription && pc.current.signalingState !== "closed") {
+              try { await pc.current.addIceCandidate(new RTCIceCandidate(msg.candidate)); } catch {}
+            } else {
+              iceQueue.current.push(msg.candidate);
+            }
             break;
           case "chat":
             addMsg(msg.text, "remote", msg.msgType);
+            break;
+          case "error":
+            addMsg(`Signaling Error: ${msg.message}`, "system");
             break;
           case "peer_left":
             setPeerStatus("waiting"); setStatusMsg(isHost ? "Guest left." : "Host left.");
@@ -282,7 +295,6 @@ export default function CallRoom({ roomCode, isHost, onLeave }) {
         </div>
 
         <div className={styles.bottomSection}>
-          <div className={styles.avatarSpace}><div className={styles.avatarSpaceInner}><span className={styles.avatarSpaceLabel}>Avatar space</span></div></div>
           <div className={styles.chatColumn}>
             {peerStatus !== "connected" && (
               <div className={styles.testBar}>
@@ -315,7 +327,6 @@ export default function CallRoom({ roomCode, isHost, onLeave }) {
               <button className={styles.sendBtn} onClick={sendMessage}><IconSend/></button>
             </div>
           </div>
-          <div className={styles.avatarSpace}><div className={styles.avatarSpaceInner}><span className={styles.avatarSpaceLabel}>Avatar space</span></div></div>
         </div>
       </div>
     </div>
